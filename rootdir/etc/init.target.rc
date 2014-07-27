@@ -1,0 +1,228 @@
+# Copyright (c) 2012, Code Aurora Forum. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are
+# met:
+#     * Redistributions of source code must retain the above copyright
+#       notice, this list of conditions and the following disclaimer.
+#     * Redistributions in binary form must reproduce the above
+#       copyright notice, this list of conditions and the following
+#       disclaimer in the documentation and/or other materials provided
+#       with the distribution.
+#     * Neither the name of Code Aurora Forum, Inc. nor the names of its
+#       contributors may be used to endorse or promote products derived
+#       from this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED
+# WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT
+# ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS
+# BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+# BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+# WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+# OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
+# IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+#
+
+on early-init
+    mkdir /firmware 0771 system system
+    symlink /data/tombstones /tombstones
+
+on emmc-fs
+    # jwheo 20120913 Remove system partition from fstab.qcom file and mount system here
+    wait /dev/block/platform/msm_sdcc.1/by-name/system
+    # lsi@ls1.130110 : [prohibit remount] mount system with rw. cause remount is prohibited as the KDDI req.
+    # mount ext4 /dev/block/platform/msm_sdcc.1/by-name/system /system ro barrier=1  
+    mount ext4 /dev/block/platform/msm_sdcc.1/by-name/system /system rw barrier=1
+
+    # jwheo 20120913 check persist partition by mmcblk_utils and mount persist before mounting userdata partition
+    wait /dev/block/platform/msm_sdcc.1/by-name/persist
+    exec /system/bin/mmcblk_utils ext4 /dev/block/platform/msm_sdcc.1/by-name/persist
+    exec /system/bin/e2fsck -p /dev/block/platform/msm_sdcc.1/by-name/persist
+    mount ext4 /dev/block/platform/msm_sdcc.1/by-name/persist /persist nosuid nodev barrier=1
+
+    # jwheo 20120913 check userdata partition by mmcblk_utils but mout userdata partition in fstab.qcom
+    wait /dev/block/platform/msm_sdcc.1/by-name/userdata
+    exec /system/bin/mmcblk_utils ext4 /dev/block/platform/msm_sdcc.1/by-name/userdata
+    exec /system/bin/e2fsck -p /dev/block/platform/msm_sdcc.1/by-name/userdata
+
+    mount_all fstab.qcom
+
+    # Keeping following partitions outside fstab file. As user may not have
+    # these partition flashed on the device. Failure to mount any partition in fstab file
+    # results in failure to launch late-start class.
+
+    wait /dev/block/platform/msm_sdcc.1/by-name/cache
+    # jwheo 20120913 check cache partition by mmcblk_utils
+    exec /system/bin/mmcblk_utils ext4 /dev/block/platform/msm_sdcc.1/by-name/cache
+    exec /system/bin/e2fsck -p /dev/block/platform/msm_sdcc.1/by-name/cache
+    mount ext4 /dev/block/platform/msm_sdcc.1/by-name/cache /cache nosuid nodev barrier=1
+
+    # jwheo 20120913 mounting persist is above
+    # wait /dev/block/platform/msm_sdcc.1/by-name/persist
+    # mount ext4 /dev/block/platform/msm_sdcc.1/by-name/persist /persist nosuid nodev barrier=1
+
+    wait /dev/block/platform/msm_sdcc.1/by-name/modem
+    mount vfat /dev/block/platform/msm_sdcc.1/by-name/modem /firmware ro shortname=lower,uid=1000,gid=1000,dmask=227,fmask=337
+
+    # jwheo 20120913 check log partition by mmcblk_utils
+    wait /dev/block/platform/msm_sdcc.1/by-name/log
+    exec /system/bin/mmcblk_utils fat16 /dev/block/platform/msm_sdcc.1/by-name/log
+
+    #yjw mount preload partition
+    wait /dev/block/platform/msm_sdcc.1/by-name/preload
+    mount ext4 /dev/block/platform/msm_sdcc.1/by-name/preload /preload nosuid nodev noatime barrier=1
+
+on boot
+    write /sys/devices/i2c-3/3-0024/cyttsp_update_fw 1
+    write /sys/devices/i2c-3/3-005b/update_fw 1
+    start qcamerasvr
+
+    # BT Power Class 2
+    setprop qcom.bt.dev_power_class 2
+    setprop qcom.bt.le_dev_pwr_class 2
+
+    # CONFIG_PN544
+    setprop ro.nfc.port "I2C"
+    chmod 0600 /dev/pn544
+    chown nfc nfc /dev/pn544
+
+    # Touch
+    chmod 0666 /dev/touch_fops
+    chmod 0666 /dev/qt602240
+
+    # LED
+    chmod 0666 /dev/led_fops
+
+    # FEATURE_PANTECH_KEY_MANAGER
+	insmod /system/lib/modules/qce40.ko
+	insmod /system/lib/modules/qcedev.ko
+
+    # Change owner and group for media server and surface flinger
+    chown system system /sys/devices/virtual/graphics/fb1/format_3d
+
+    chown system system /sys/class/graphics/fb0/cabc_ctl
+    chmod 0664 /sys/class/graphics/fb0/cabc_ctl
+    chown system system /sys/class/graphics/fb0/encryption
+    chmod 0664 /sys/class/graphics/fb0/encryption
+
+    # Disable early data connections
+    setprop net.early.sockets 0
+
+    # Define TCP buffer sizes for various networks
+    #   ReadMin, ReadInitial, ReadMax, WriteMin, WriteInitial, WriteMax,
+    setprop net.tcp.buffersize.default 4096,174760,2400000,4096,16384,2400000
+    setprop net.tcp.buffersize.wifi    524288,1048576,5191630,262144,1048576,5191630
+    setprop net.tcp.buffersize.umts    4096,174760,2400000,4096,16384,2400000
+    setprop net.tcp.buffersize.hspa    4096,174760,2400000,4096,16384,2400000
+    setprop net.tcp.buffersize.hsupa   4096,174760,2400000,4096,16384,2400000
+    setprop net.tcp.buffersize.hsdpa   4096,174760,2400000,4096,16384,2400000
+    setprop net.tcp.buffersize.edge    4096,26280,35040,4096,16384,35040
+    setprop net.tcp.buffersize.gprs    4096,8760,11680,4096,8760,11680
+    setprop net.tcp.buffersize.lte     524288,1048576,5191630,262144,1048576,5191630
+    setprop net.tcp.buffersize.evdo_b  4096,174760,2400000,4096,16384,2400000
+
+    # Assign TCP buffer thresholds to be ceiling value of technology maximums
+    # Increased technology maximums should be reflected here.
+    write /proc/sys/net/core/rmem_max  5191630
+    write /proc/sys/net/core/wmem_max  5191630
+
+on post-fs-data
+    mkdir /data/tombstones 0771 system system
+    mkdir /tombstones/modem 0771 system system
+    mkdir /tombstones/lpass 0771 system system
+    mkdir /tombstones/wcnss 0771 system system
+    mkdir /tombstones/dsps 0771 system system
+
+#start camera server as daemon
+service qcamerasvr /system/bin/mm-qcamera-daemon
+    class late_start
+    user camera
+    group camera system inet input graphics
+
+#start GNSS/Sensor interface daemon
+service gsiff_daemon /system/bin/gsiff_daemon
+    class late_start
+    user system
+    group gps qcom_oncrpc net_raw
+
+service thermald /system/bin/thermald
+    class main
+    user root
+    group root
+
+service mpdecision /system/bin/mpdecision --no_sleep --avg_comp
+    user root
+    disabled
+
+service qosmgrd /system/bin/qosmgr /system/etc/qosmgr_rules.xml
+   user system
+   group system
+   disabled
+
+service kickstart /system/bin/qcks -i /firmware/image/
+    oneshot
+    disabled
+
+service mdm_helper /system/bin/mdm_helper
+    class main
+    onrestart setprop ro.service.mdm_helper_restarted "true"
+    disabled
+
+service qrngd /system/bin/qrngd -f
+   class main
+   user root
+   group root
+
+service qseecomd /system/bin/qseecomd
+   class late_start
+   user system
+   group system
+
+# Start kickstart if mdm is detected
+on property:ro.baseband=mdm
+    mkdir /data/qcks 0770 system system
+    start kickstart
+
+# Start up mdm_helper if sglte detected
+on property:ro.baseband=sglte
+    mkdir /data/misc/mdmhelperdata 0700
+    start mdm_helper
+
+service usf_tester /system/bin/usf_tester
+    user system
+    group system inet
+    disabled
+
+service usf_epos /system/bin/usf_epos
+    user system
+    group system inet
+    disabled
+
+service usf_gesture /system/bin/usf_gesture
+    user system
+    group system inet
+    disabled
+
+service usf_p2p /system/bin/usf_p2p
+    user system
+    group system inet
+    disabled
+
+service usf_hovering /system/bin/usf_hovering
+    user system
+    group system inet
+    disabled
+
+service usf-post-boot /system/bin/sh /system/etc/usf_post_boot.sh
+    class late_start
+    user root
+    disabled
+    oneshot
+
+on property:init.svc.bootanim=stopped
+    start usf-post-boot
+
